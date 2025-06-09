@@ -1,0 +1,13 @@
+# Ignore Node.js dependencies
+node_modules/
+
+# Ignore specific files
+code_prompt.md
+woshipm_articles.xlsx
+
+# Ignore backup files
+scraper copy.js.bak*
+
+
+# 
+website.html
