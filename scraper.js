@@ -146,23 +146,51 @@ const { MongoClient } = require('mongodb'); // Import MongoClient
 
       console.log(`Scraping details for article ID: ${articleId} - ${link}`);
 
+      // Clean the HTML content directly on the page before extraction
+      const cleanedHtmlContent = await pageInstance.evaluate(() => {
+        // Select the main article wrapper
+        const contentWrapper = document.querySelector('div.article--wrapper');
+        if (!contentWrapper) return '';
+
+        // Clone the node to avoid modifying the live page
+        const contentClone = contentWrapper.cloneNode(true);
+
+        // Define selectors for elements to REMOVE from the article content
+        const selectorsToRemove = [
+          '.author-card',          // Author info card
+          '.article--postmeta',    // Metadata section
+          '.relate-post',          // Related Posts
+          '.copyright-statement',  // Copyright
+          'div[data-role="ad"]',   // Ads
+          '.rewards-wrapper',      // Tip author section
+          '.woshipm-statement'     // Site statement
+        ];
+
+        // Remove unwanted elements
+        selectorsToRemove.forEach(selector => {
+          const element = contentClone.querySelector(selector);
+          if (element) element.remove();
+        });
+
+        return contentClone.innerHTML.trim();
+      });
+
       const data = {
-        _id: articleId, // MongoDB's unique identifier
-        id: articleId, // Also include in data for Excel/clarity
+        _id: articleId,
+        id: articleId,
         article_title: await getElementText(pageInstance, 'h2.article--title'),
         article_author: await getElementText(pageInstance, 'a.ui-captionStrong'),
         author_Link: await getElementAttr(pageInstance, '.authorCard--title a', 'href'),
         article_published: await getElementText(pageInstance, 'time'),
         article_brief: await getElementText(pageInstance, 'blockquote p'),
         article_img: await getElementSrc(pageInstance, 'a.u-flex img.avatar'),
-        article_info: await getElementText(pageInstance, 'div.meta--sup__right'),
         comments: parseInt((await getElementText(pageInstance, 'div.meta--sup__right')).match(/(\d+)\s*评论/)?.[1] || 0),
         views: parseInt((await getElementText(pageInstance, 'div.meta--sup__right')).match(/(\d+)\s*浏览/)?.[1] || 0),
         collects: parseInt((await getElementText(pageInstance, 'div.meta--sup__right')).match(/(\d+)\s*收藏/)?.[1] || 0),
-        article_content: await getElementInnerHtml(pageInstance, 'div.article--wrapper'), // Full HTML content
+        article_content: cleanedHtmlContent, // Use cleaned HTML
         article_tag: await getTags(pageInstance),
         article_link: link,
-        scraped_at: new Date() // Timestamp for when the data was scraped
+        scraped_at: new Date()
       };
       return data;
     }

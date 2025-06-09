@@ -13,10 +13,31 @@ const OUTPUT_DIR = './woshipm-gitbook';
   let mongoClient;
 
   try {
-    // Initialize services
+    // Initialize and configure Turndown service
     console.log('Initializing services...');
-    const turndownService = new TurndownService();
-    
+    const turndownService = new TurndownService({
+      headingStyle: 'atx',
+      codeBlockStyle: 'fenced',
+      emDelimiter: '_',
+      bulletListMarker: '-',
+      strongDelimiter: '**'
+    });
+
+    // Add custom rules for better Markdown conversion
+    turndownService.addRule('lazy-image', {
+      filter: (node) => node.nodeName === 'IMG' && node.getAttribute('data-src'),
+      replacement: (content, node) => {
+        const src = node.getAttribute('data-src') || '';
+        const alt = node.getAttribute('alt') || '';
+        return `![${alt}](${src})`;
+      }
+    });
+
+    turndownService.addRule('div-cleanup', {
+      filter: ['div'],
+      replacement: (content) => content
+    });
+
     // Connect to MongoDB
     console.log('Connecting to MongoDB...');
     mongoClient = new MongoClient(MONGO_URI);
@@ -57,12 +78,26 @@ const OUTPUT_DIR = './woshipm-gitbook';
       // Convert HTML to Markdown
       const markdownContent = turndownService.turndown(article.article_content || '');
 
-      // Create article file content
+      // Format tags
+      const tags = (article.article_tag || '')
+        .split(',')
+        .map(tag => tag.trim())
+        .filter(tag => tag)
+        .map(tag => `\`${tag}\``)
+        .join(' ');
+
+      // Create article file with enhanced metadata header
       const fileContent = `# ${article.article_title || 'Untitled'}
 
-> **Author:** ${article.article_author || 'N/A'}  
-> **Published:** ${article.article_published || 'N/A'}  
-> **Original Link:** [View Original](${article.article_link})
+{% hint style="info" %}
+**Author:** [${article.article_author || 'Unknown'}](${article.author_Link || '#'})  
+**Published:** ${article.article_published || 'Unknown date'}  
+**Stats:** 👁️ ${article.views || 0} views | 💬 ${article.comments || 0} comments | ⭐ ${article.collects || 0} collects  
+**Tags:** ${tags || 'None'}  
+**Original:** [View on woshipm.com](${article.article_link})
+{% endhint %}
+
+> ${article.article_brief || 'No summary available.'}
 
 ---
 
@@ -71,13 +106,16 @@ ${markdownContent}
 
       await fs.writeFile(filePath, fileContent);
     }
-    
+
     // Write SUMMARY.md
     await fs.writeFile(path.join(OUTPUT_DIR, 'SUMMARY.md'), summaryContent);
 
     console.log('\n✅ GitBook generation complete!');
     console.log(`Files are located in the '${OUTPUT_DIR}' directory.`);
-    console.log('Next steps: Upload this directory to a GitHub repository and connect it to GitBook.');
+    console.log('Next steps:');
+    console.log('1. cd woshipm-gitbook');
+    console.log('2. git init && git add . && git commit -m "Initial commit"');
+    console.log('3. Connect to GitBook');
 
   } catch (error) {
     console.error('An error occurred during GitBook generation:', error);
