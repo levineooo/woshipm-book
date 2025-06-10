@@ -6,32 +6,24 @@ const path = require('path');
 // --- Configuration ---
 const MONGO_URI = 'mongodb://localhost:27017';
 const MONGO_DB_NAME = 'woshipm';
-const MONGO_COLLECTION_NAME = 'articles'; // The single, unified collection
-const OUTPUT_DIR = './WOSHIPM-Library'; // New general name
+const MONGO_COLLECTION_NAME = 'articles';
+const OUTPUT_DIR = './WOSHIPM-Library';
 const BOOK_TITLE = 'My WOSHIPM Library';
 
 (async () => {
   let mongoClient;
 
   try {
-    // --- Initialize Turndown with proper filters ---
+    // --- Initialize Turndown (no changes here) ---
     const turndownService = new TurndownService({
       headingStyle: 'atx',
       codeBlockStyle: 'fenced',
-      blankReplacement: (content, node) => {
-        return node.isBlock ? '\n\n' : '';
-      },
-      defaultReplacement: (content, node) => {
-        return content;
-      }
     });
-    
-    // Add rules for special elements
     turndownService.addRule('lazy-image', {
       filter: ['img'],
       replacement: (content, node) => {
         const alt = node.alt || '';
-        const src = node.src || '';
+        const src = node.src || node.getAttribute('data-src') || '';
         return src ? `![${alt}](${src})` : '';
       }
     });
@@ -43,7 +35,6 @@ const BOOK_TITLE = 'My WOSHIPM Library';
     const collection = db.collection(MONGO_COLLECTION_NAME);
 
     console.log('Fetching all articles from MongoDB...');
-    // ⭐ Fetch all articles and SORT BY THE NEW DATE OBJECT, newest first
     const allArticles = await collection.find({}).sort({ published_date_obj: -1 }).toArray();
     
     if (allArticles.length === 0) {
@@ -52,94 +43,97 @@ const BOOK_TITLE = 'My WOSHIPM Library';
     }
     console.log(`Found ${allArticles.length} total articles.`);
     
-    // ⭐ Group articles by category
-    const articlesByCategory = allArticles.reduce((acc, article) => {
+    // ⭐ Group articles by Category -> Year -> Month
+    const articlesByHierarchy = allArticles.reduce((acc, article) => {
       const category = article.category || 'uncategorized';
-      if (!acc[category]) {
-        acc[category] = [];
-      }
-      acc[category].push(article);
+      const date = new Date(article.published_date_obj);
+      const year = date.getFullYear();
+      const month = (date.getMonth() + 1).toString().padStart(2, '0'); // e.g., '05' for May
+
+      if (!acc[category]) acc[category] = {};
+      if (!acc[category][year]) acc[category][year] = {};
+      if (!acc[category][year][month]) acc[category][year][month] = [];
+      
+      acc[category][year][month].push(article);
       return acc;
     }, {});
     
     // --- Prepare Output Directory ---
-    const articlesDir = path.join(OUTPUT_DIR, 'articles');
-    await fs.ensureDir(articlesDir);
+    await fs.emptyDir(OUTPUT_DIR); // Clean the directory before generating
     console.log(`Output directory prepared at: ${OUTPUT_DIR}`);
 
     // --- Generate README.md ---
-    const readmeContent = `# ${BOOK_TITLE}\n\nAn automatically generated collection of articles from woshipm.com, sorted by category.\n\nTotal articles: ${allArticles.length}`;
+    const readmeContent = `# ${BOOK_TITLE}\n\nAn automatically generated collection of articles from woshipm.com, sorted by category and date.\n\nTotal articles: ${allArticles.length}`;
     await fs.writeFile(path.join(OUTPUT_DIR, 'README.md'), readmeContent);
 
-    // --- ⭐ Generate Categorized SUMMARY.md and Article Files ---
+    // ⭐ Generate Hierarchical SUMMARY.md and Article Files ---
     let summaryContent = `# Table of Contents\n\n* [Introduction](./README.md)\n\n`;
 
-    console.log('Generating categorized book structure...');
-    // Loop through each category to build the summary
-    for (const categoryName in articlesByCategory) {
-      // Add a main heading for the category
-      summaryContent += `## ${categoryName.charAt(0).toUpperCase() + categoryName.slice(1)}\n\n`;
-      
-      const articles = articlesByCategory[categoryName];
-      for (const article of articles) {
-        const cleanTitle = (article.article_title || 'Untitled').replace(/[/\\?%*:|"<>]/g, '-');
-        // ⭐ New filename structure: category-id.md
-        const fileName = `${article.category}-${article._id}.md`;
-        const filePath = path.join(articlesDir, fileName);
+    console.log('Generating hierarchical book structure...');
+    
+    // Loop through Categories
+    for (const categoryName in articlesByHierarchy) {
+      const categoryTitle = categoryName.charAt(0).toUpperCase() + categoryName.slice(1);
+      summaryContent += `## ${categoryTitle}\n\n`;
 
-        // Add article link under its category heading
-        summaryContent += `* [${cleanTitle}](./articles/${fileName})\n`;
-
-        // --- Generate Individual Article File ---
-        let markdownContent = '';
-        try {
-          // Clean and normalize HTML content
-          let cleanHtml = (article.article_content || '')
-            .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-            .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-            .replace(/<[^>]+>/g, match => {
-              // Ensure all tags have proper closing
-              if (!match.endsWith('>')) return '';
-              return match;
-            })
-            .trim();
-
-          // Convert only if we have valid content
-          if (cleanHtml && cleanHtml.length > 10) { // Minimum content length check
-            markdownContent = turndownService.turndown(cleanHtml);
-          } else {
-            markdownContent = 'No content available';
-          }
-        } catch (err) {
-          console.warn(`Failed to convert HTML for article ${article._id}:`, err.message);
-          markdownContent = `## Content Conversion Notice\n` +
-            `The original content could not be automatically converted to Markdown.\n\n` +
-            `**Original URL:** [View on woshipm.com](${article.article_link})`;
-        }
+      // Loop through Years
+      for (const year in articlesByHierarchy[categoryName]) {
+        summaryContent += `  * [${year}](./articles/${categoryName}/${year}/README.md)\n`;
+        const yearPath = path.join(OUTPUT_DIR, 'articles', categoryName, year);
+        await fs.ensureDir(yearPath);
+        // Create a README for the year
+        await fs.writeFile(
+          path.join(yearPath, 'README.md'), 
+          `# ${categoryTitle} - ${year}\n\nArticles published in ${year}.`
+        );
         
-        const tags = (article.article_tag || '').split(',').map(tag => tag.trim()).filter(Boolean);
-        const formattedTags = tags.length ? tags.map(tag => `\`${tag}\``).join(' ') : 'None';
-        
-        const fileHeader = `
+        // Loop through Months
+        for (const month in articlesByHierarchy[categoryName][year]) {
+          const monthName = new Date(`${year}-${month}-01`).toLocaleString('default', { month: 'long' });
+          summaryContent += `    * [${monthName}](./articles/${categoryName}/${year}/${month}/README.md)\n`;
+          const monthPath = path.join(yearPath, month);
+          await fs.ensureDir(monthPath);
+          // Create a README for the month
+          await fs.writeFile(
+            path.join(monthPath, 'README.md'), 
+            `# ${categoryTitle} - ${monthName} ${year}\n\nArticles published in ${monthName} ${year}.`
+          );
+
+          const articles = articlesByHierarchy[categoryName][year][month];
+          // Loop through articles in that month
+          for (const article of articles) {
+            const cleanTitle = (article.article_title || 'Untitled').replace(/[/\\?%*:|"<>]/g, '-');
+            // ⭐ New filename is just the ID, as the path provides all context
+            const fileName = `${article._id}.md`;
+            const filePath = path.join(monthPath, fileName);
+
+            // Add article link with proper indentation
+            summaryContent += `        * [${cleanTitle}](./articles/${categoryName}/${year}/${month}/${fileName})\n`;
+
+            // --- Generate Individual Article File (logic is the same as before) ---
+            const markdownContent = turndownService.turndown(article.article_content || 'No content available.');
+            const tags = (article.article_tag || '').split(',').map(tag => tag.trim()).filter(Boolean);
+            const formattedTags = tags.length ? tags.map(tag => `\`${tag}\``).join(' ') : 'None';
+            const fileHeader = `
 # ${article.article_title || 'Untitled'}
 {% hint style="info" %}
-**Category:** ${article.category.charAt(0).toUpperCase() + article.category.slice(1)}
+**Category:** ${categoryTitle}
 **Author:** [${article.article_author || 'N/A'}](${article.author_Link || '#'})
 **Published:** ${article.article_published || 'N/A'}  
 **Stats:** 👁️ ${article.views || 0} views | 💬 ${article.comments || 0} comments | ⭐ ${article.collects || 0} collects
-**Tags:** ${tags || 'None'}
+**Tags:** ${formattedTags}
 **Original:** [View on woshipm.com](${article.article_link})
 {% endhint %}
 > ${article.article_brief || 'No brief available.'}
-        `.trim();
-        
-        const finalFileContent = `${fileHeader}\n\n---\n\n${markdownContent}`;
-        await fs.writeFile(filePath, finalFileContent);
+            `.trim();
+            const finalFileContent = `${fileHeader}\n\n---\n\n${markdownContent}`;
+            await fs.writeFile(filePath, finalFileContent);
+          }
+        }
       }
       summaryContent += `\n`; // Add a space after each category section
     }
 
-    // Write the final SUMMARY.md file
     await fs.writeFile(path.join(OUTPUT_DIR, 'SUMMARY.md'), summaryContent);
     console.log('\n✅ GitBook generation complete!');
 
